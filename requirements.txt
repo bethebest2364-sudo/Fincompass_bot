@@ -1,5 +1,0 @@
-aiogram==2.25.1
-requests==2.31.0
-yfinance==0.2.33
-beautifulsoup4==4.12.3
-lxml==5.1.0
