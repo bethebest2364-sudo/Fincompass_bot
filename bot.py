@@ -194,21 +194,53 @@ def get_stock_quote(ticker):
 def get_historical_data(asset_type, symbol, days=7):
     if asset_type == 'currency':
         if symbol == 'CNY':
-            # Для CNY используем exchangerate.host (Yahoo Finance часто не даёт историю)
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            url = f"https://api.exchangerate.host/timeseries?start_date={start_date.date()}&end_date={end_date.date()}&base=CNY&symbols=RUB"
-            try:
-                resp = requests.get(url, timeout=10)
-                data = resp.json()
-                if data.get('rates'):
-                    dates = sorted(data['rates'].keys())
-                    values = [data['rates'][d]['RUB'] for d in dates]
-                    if dates and values:
-                        return {'dates': dates, 'values': values}
+            # Для CNY используем кросс-курс через Yahoo Finance
+            # Получаем историю USD/RUB
+            ticker_usd_rub = 'USDRUB=X'
+            url_usd_rub = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_rub}?range={days}d&interval=1d"
+            resp_usd_rub = requests.get(url_usd_rub, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data_usd_rub = resp_usd_rub.json()
+            if 'chart' not in data_usd_rub or 'result' not in data_usd_rub['chart'] or not data_usd_rub['chart']['result']:
                 return None
-            except:
+            timestamps_usd_rub = data_usd_rub['chart']['result'][0]['timestamp']
+            close_usd_rub = data_usd_rub['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates_usd_rub = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps_usd_rub]
+            valid_usd_rub = [(d, c) for d, c in zip(dates_usd_rub, close_usd_rub) if c is not None]
+            if not valid_usd_rub:
                 return None
+
+            # Получаем историю USD/CNY
+            ticker_usd_cny = 'USDCNY=X'
+            url_usd_cny = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_cny}?range={days}d&interval=1d"
+            resp_usd_cny = requests.get(url_usd_cny, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data_usd_cny = resp_usd_cny.json()
+            if 'chart' not in data_usd_cny or 'result' not in data_usd_cny['chart'] or not data_usd_cny['chart']['result']:
+                return None
+            timestamps_usd_cny = data_usd_cny['chart']['result'][0]['timestamp']
+            close_usd_cny = data_usd_cny['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates_usd_cny = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps_usd_cny]
+            valid_usd_cny = [(d, c) for d, c in zip(dates_usd_cny, close_usd_cny) if c is not None]
+            if not valid_usd_cny:
+                return None
+
+            # Объединяем по датам и вычисляем CNY/RUB
+            dates_common = sorted(set([d for d, _ in valid_usd_rub]) & set([d for d, _ in valid_usd_cny]))
+            if not dates_common:
+                return None
+            dict_usd_rub = {d: c for d, c in valid_usd_rub}
+            dict_usd_cny = {d: c for d, c in valid_usd_cny}
+            values = []
+            for d in dates_common:
+                usd_rub = dict_usd_rub[d]
+                usd_cny = dict_usd_cny[d]
+                if usd_cny != 0:
+                    values.append(usd_rub / usd_cny)
+                else:
+                    values.append(None)
+            valid_values = [(d, v) for d, v in zip(dates_common, values) if v is not None]
+            if not valid_values:
+                return None
+            return {'dates': [d for d, _ in valid_values], 'values': [v for _, v in valid_values]}
         else:
             # Для USD и EUR используем Yahoo Finance
             symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X'}
@@ -570,7 +602,7 @@ def cmd_stock(message):
     else:
         bot.reply_to(message, "❌ Не найден тикер или ошибка API.", reply_markup=main_menu_button())
 
-# ---------- FALLBACK ДЛЯ ТЕКСТОВЫХ СООБЩЕНИЙ (всегда в конце) ----------
+# ---------- FALLBACK ДЛЯ ТЕКСТОВЫХ СООБЩЕНИЙ ----------
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
