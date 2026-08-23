@@ -23,7 +23,6 @@ def main_menu_button():
 
 # ---------- ФУНКЦИИ ДЛЯ API ----------
 def get_currency_rates():
-    """Получает курсы USD, EUR, CNY к рублю через Yahoo Finance"""
     symbols = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X', 'CNY': 'CNYRUB=X'}
     rates = {}
     for code, ticker in symbols.items():
@@ -42,15 +41,12 @@ def get_currency_rates():
     else:
         return None
 
-# MOEX через официальный API МосБиржи
 def get_moex_index():
     url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
         resp = requests.get(url, timeout=10)
         data = resp.json()
         row = data['marketdata']['data'][0]
-        # row: [TRADEDATE, TIME, CLOSE, OPEN, HIGH, LOW, NUMTRADES, VALUE, VOLUME, ...]
-        # CLOSE - индекс закрытия, CHANGE - изменение в процентах
         return {'value': row[2], 'change': row[5]}
     except:
         return None
@@ -143,10 +139,14 @@ def get_sp500():
         meta = data['chart']['result'][0]['meta']
         price = meta.get('regularMarketPrice')
         previous_close = meta.get('previousClose')
-        if price and previous_close:
-            change = ((price - previous_close) / previous_close) * 100
+        if price:
+            if previous_close:
+                change = ((price - previous_close) / previous_close) * 100
+            else:
+                change = 0
             return {'value': round(price, 2), 'change': round(change, 2)}
-        return None
+        else:
+            return None
     except:
         return None
 
@@ -184,7 +184,10 @@ def get_stock_quote(ticker):
                 'change': round(change, 2),
                 'currency': currency
             }
-        return None
+        elif regular_market_price:
+            return {'price': round(regular_market_price, 2), 'change': 0, 'currency': meta.get('currency', 'USD')}
+        else:
+            return None
     except:
         return None
 
@@ -275,7 +278,7 @@ def get_historical_data(asset_type, symbol, days=7):
             return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            # MOEX через официальный API МосБиржи (история)
+            # Сначала пробуем официальный API МосБиржи
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             from_date = start_date.strftime('%Y-%m-%d')
@@ -286,16 +289,29 @@ def get_historical_data(asset_type, symbol, days=7):
                 data = resp.json()
                 history = data['history']['data']
                 if history:
-                    # history row: [TRADEDATE, CLOSE, OPEN, HIGH, LOW, ...]
                     dates = [row[0] for row in history]
-                    values = [row[1] for row in history]
+                    values = [row[1] for row in history]  # CLOSE
                     if dates and values:
                         return {'dates': dates, 'values': values}
+            except:
+                pass
+            # Если API МосБиржи не дал данных, пробуем Yahoo
+            ticker = 'IMOEX.ME'
+            url_yahoo = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+            try:
+                resp_yahoo = requests.get(url_yahoo, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                data_yahoo = resp_yahoo.json()
+                if 'chart' in data_yahoo and 'result' in data_yahoo['chart'] and data_yahoo['chart']['result']:
+                    timestamps = data_yahoo['chart']['result'][0]['timestamp']
+                    close = data_yahoo['chart']['result'][0]['indicators']['quote'][0]['close']
+                    dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+                    valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+                    if valid:
+                        return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
                 return None
             except:
                 return None
         elif symbol == 'SP500':
-            # S&P 500 через Yahoo Finance
             ticker = '^GSPC'
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
             try:
