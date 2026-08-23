@@ -101,14 +101,14 @@ def get_cbr_rates():
             code = valute.find('CharCode').text
             value = valute.find('Value').text.replace(',', '.')
             nominal = valute.find('Nominal').text
-            # Делим на номинал, чтобы получить курс за 1 единицу валюты
+            # Ключевое исправление: делим на номинал
             rates[code] = float(value) / float(nominal)
         return rates
     except Exception as e:
         logging.error(f"Ошибка получения курсов ЦБ: {e}")
         return None
 
-# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений) ----------
+# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ ----------
 def get_moex_index():
     url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
