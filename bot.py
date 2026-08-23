@@ -41,41 +41,41 @@ def get_currency_rates():
     else:
         return None
 
-# ---------- MOEX (полностью через ISS) ----------
+# ---------- MOEX через Yahoo Finance (основной) ----------
 def get_moex_index():
-    """Возвращает текущее значение и изменение в % через ISS"""
+    # Основной источник: Yahoo Finance
     try:
-        # Получаем текущее значение из marketdata
-        url_market = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
-        resp_market = requests.get(url_market, timeout=10)
-        data_market = resp_market.json()
-        row = data_market['marketdata']['data'][0]
-        current_value = row[2]  # CLOSE
-
-        # Получаем предыдущее значение из истории (за последний торговый день)
-        # Чтобы вычислить изменение, берём историю за 2 дня
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=3)  # чтобы точно попасть
-        from_date = start_date.strftime('%Y-%m-%d')
-        till_date = end_date.strftime('%Y-%m-%d')
-        url_hist = f"https://iss.moex.com/iss/history/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json?from={from_date}&till={till_date}"
-        resp_hist = requests.get(url_hist, timeout=10)
-        data_hist = resp_hist.json()
-        history = data_hist['history']['data']
-        if history and len(history) >= 2:
-            # history: [TRADEDATE, CLOSE, ...]
-            # Берём последнее значение (сегодня) и предпоследнее (вчера)
-            last_close = history[-1][1]
-            prev_close = history[-2][1]
-            if prev_close != 0:
-                change = ((last_close - prev_close) / prev_close) * 100
+        ticker = 'IMOEX.ME'
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
+        resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        data = resp.json()
+        meta = data['chart']['result'][0]['meta']
+        price = meta.get('regularMarketPrice')
+        previous_close = meta.get('previousClose')
+        if price:
+            if previous_close:
+                change = ((price - previous_close) / previous_close) * 100
             else:
                 change = 0
-            return {'value': current_value, 'change': change}
+            return {'value': round(price, 2), 'change': round(change, 2)}
+    except:
+        pass
+
+    # Запасной источник: ISS (на случай, если Yahoo не работает)
+    try:
+        url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        row = data['marketdata']['data'][0]
+        # row: [TRADEDATE, TIME, CLOSE, OPEN, HIGH, LOW, ...]
+        value = row[2]
+        change = row[5] if len(row) > 5 else 0
+        # Проверяем, что значение адекватное (больше 100)
+        if value > 100:
+            return {'value': value, 'change': change}
         else:
-            return {'value': current_value, 'change': 0}
-    except Exception as e:
-        logging.error(f"Ошибка получения MOEX: {e}")
+            return None
+    except:
         return None
 
 def get_crypto(coin):
@@ -305,7 +305,26 @@ def get_historical_data(asset_type, symbol, days=7):
             return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            # MOEX через ISS историю
+            # Основной источник: Yahoo Finance
+            ticker = 'IMOEX.ME'
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+            try:
+                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                data = resp.json()
+                if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
+                    timestamps = data['chart']['result'][0]['timestamp']
+                    close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+                    dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+                    valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+                    if valid and len(valid) > 1:
+                        # Проверяем, что значения реалистичные (больше 100)
+                        avg = sum(v for _, v in valid) / len(valid)
+                        if avg > 100:
+                            return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+            except:
+                pass
+
+            # Запасной источник: ISS
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             from_date = start_date.strftime('%Y-%m-%d')
@@ -316,16 +335,17 @@ def get_historical_data(asset_type, symbol, days=7):
                 data = resp.json()
                 history = data['history']['data']
                 if history:
-                    # history row: [TRADEDATE, CLOSE, ...]
                     dates = [row[0] for row in history]
                     values = [row[1] for row in history]  # CLOSE
                     if dates and values:
-                        return {'dates': dates, 'values': values}
-                return None
+                        avg = sum(values) / len(values)
+                        if avg > 100:
+                            return {'dates': dates, 'values': values}
             except:
-                return None
+                pass
+            return None
+
         elif symbol == 'SP500':
-            # S&P 500 через Yahoo Finance
             ticker = '^GSPC'
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
             try:
