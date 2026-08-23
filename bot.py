@@ -193,25 +193,43 @@ def get_stock_quote(ticker):
 # ---------- ГРАФИКИ ----------
 def get_historical_data(asset_type, symbol, days=7):
     if asset_type == 'currency':
-        symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X', 'CNY': 'CNYRUB=X'}
-        if symbol not in symbol_map:
-            return None
-        ticker = symbol_map[symbol]
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-        try:
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data = resp.json()
-            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+        if symbol == 'CNY':
+            # Для CNY используем exchangerate.host (Yahoo Finance часто не даёт историю)
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            url = f"https://api.exchangerate.host/timeseries?start_date={start_date.date()}&end_date={end_date.date()}&base=CNY&symbols=RUB"
+            try:
+                resp = requests.get(url, timeout=10)
+                data = resp.json()
+                if data.get('rates'):
+                    dates = sorted(data['rates'].keys())
+                    values = [data['rates'][d]['RUB'] for d in dates]
+                    if dates and values:
+                        return {'dates': dates, 'values': values}
                 return None
-            timestamps = data['chart']['result'][0]['timestamp']
-            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-            if valid:
-                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-            return None
-        except:
-            return None
+            except:
+                return None
+        else:
+            # Для USD и EUR используем Yahoo Finance
+            symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X'}
+            if symbol not in symbol_map:
+                return None
+            ticker = symbol_map[symbol]
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+            try:
+                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                data = resp.json()
+                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+                    return None
+                timestamps = data['chart']['result'][0]['timestamp']
+                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+                if valid:
+                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+                return None
+            except:
+                return None
     elif asset_type == 'crypto':
         symbol_map = {'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT'}
         if symbol not in symbol_map:
