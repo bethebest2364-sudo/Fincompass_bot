@@ -21,37 +21,40 @@ def main_menu_button():
     markup.add(btn)
     return markup
 
-# ---------- ФУНКЦИИ ДЛЯ API ----------
-def get_cbr_rates():
-    """Получает курсы USD, EUR, CNY к рублю через exchangerate.host"""
-    url = "https://api.exchangerate.host/latest?base=USD&symbols=RUB,EUR,CNY"
-    try:
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        if data.get('success'):
-            rates = {}
-            usd_rub = data['rates']['RUB']
-            rates['USD'] = usd_rub
-            # EUR/RUB = (EUR/USD) * (USD/RUB)
-            eur_usd = data['rates']['EUR']
-            rates['EUR'] = eur_usd * usd_rub
-            # CNY/RUB = (CNY/USD) * (USD/RUB)
-            cny_usd = data['rates']['CNY']
-            rates['CNY'] = cny_usd * usd_rub
-            return rates
-        else:
-            return None
-    except Exception as e:
-        logging.error(f"Ошибка получения курсов: {e}")
+# ---------- ФУНКЦИИ ДЛЯ API (ВСЕ ЧЕРЕЗ YAHOO FINANCE) ----------
+
+def get_currency_rates():
+    """Получает курсы USD, EUR, CNY к рублю через Yahoo Finance"""
+    symbols = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X', 'CNY': 'CNYRUB=X'}
+    rates = {}
+    for code, ticker in symbols.items():
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data = resp.json()
+            meta = data['chart']['result'][0]['meta']
+            price = meta.get('regularMarketPrice')
+            if price:
+                rates[code] = price
+        except:
+            rates[code] = None
+    if any(rates.values()):
+        return rates
+    else:
         return None
 
 def get_moex_index():
-    url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/IMOEX.ME?range=1d&interval=1d"
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
-        row = data['marketdata']['data'][0]
-        return {'value': row[2], 'change': row[5]}
+        meta = data['chart']['result'][0]['meta']
+        price = meta.get('regularMarketPrice')
+        previous_close = meta.get('previousClose')
+        if price and previous_close:
+            change = ((price - previous_close) / previous_close) * 100
+            return {'value': round(price, 2), 'change': round(change, 2)}
+        return None
     except:
         return None
 
@@ -97,23 +100,26 @@ def get_key_rate():
             return None
 
 def get_gold_price():
-    url = "https://api.gold-api.com/price/XAU"
+    ticker = 'GC=F'
     try:
-        resp = requests.get(url, timeout=10)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
+        resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
-        price_usd = data['price']
-        rates = get_cbr_rates()
-        if rates and 'USD' in rates:
-            rub_rate = rates['USD']
-            price_rub = price_usd * rub_rate
-            return {'usd': round(price_usd, 2), 'rub': round(price_rub, 2)}
+        meta = data['chart']['result'][0]['meta']
+        price_usd = meta.get('regularMarketPrice')
+        if price_usd:
+            rates = get_currency_rates()
+            if rates and 'USD' in rates:
+                rub_rate = rates['USD']
+                price_rub = price_usd * rub_rate
+                return {'usd': round(price_usd, 2), 'rub': round(price_rub, 2)}
         return None
     except:
         return None
 
 def get_oil_price():
     ticker = "CL=F"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     try:
         resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
@@ -126,14 +132,14 @@ def get_oil_price():
         return None
 
 def get_cny_rate():
-    rates = get_cbr_rates()
+    rates = get_currency_rates()
     if rates and 'CNY' in rates:
         return {'value': rates['CNY']}
     return None
 
 def get_sp500():
     ticker = "^GSPC"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     try:
         resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
@@ -166,7 +172,7 @@ def get_news():
         return None
 
 def get_stock_quote(ticker):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     try:
         resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
@@ -188,127 +194,84 @@ def get_stock_quote(ticker):
 # ---------- ГРАФИКИ ----------
 def get_historical_data(asset_type, symbol, days=7):
     if asset_type == 'currency':
-        if symbol == 'CNY':
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            url = f"https://api.exchangerate.host/timeseries?start_date={start_date.date()}&end_date={end_date.date()}&base=CNY&symbols=RUB"
-            try:
-                resp = requests.get(url, timeout=10)
-                data = resp.json()
-                if data.get('rates'):
-                    dates = sorted(data['rates'].keys())
-                    values = [data['rates'][d]['RUB'] for d in dates]
-                    if dates and values:
-                        return {'dates': dates, 'values': values}
+        # Все валюты через Yahoo Finance
+        symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X', 'CNY': 'CNYRUB=X'}
+        if symbol not in symbol_map:
+            return None
+        ticker = symbol_map[symbol]
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+        try:
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data = resp.json()
+            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
                 return None
-            except:
-                return None
-        else:
-            symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X'}
-            if symbol not in symbol_map:
-                return None
-            ticker = symbol_map[symbol]
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
-                    return None
-                timestamps = data['chart']['result'][0]['timestamp']
-                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                if valid:
-                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
-            except:
-                return None
+            timestamps = data['chart']['result'][0]['timestamp']
+            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+            if valid:
+                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+            return None
+        except:
+            return None
     elif asset_type == 'crypto':
         symbol_map = {'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT'}
-        if symbol in symbol_map:
-            sym = symbol_map[symbol]
-            url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=1d&limit={days}"
-            try:
-                resp = requests.get(url, timeout=10)
-                data = resp.json()
-                dates = [datetime.fromtimestamp(c[0]/1000).strftime('%Y-%m-%d') for c in data]
-                values = [float(c[4]) for c in data]
-                if dates and values:
-                    return {'dates': dates, 'values': values}
-                return None
-            except:
-                return None
+        if symbol not in symbol_map:
+            return None
+        sym = symbol_map[symbol]
+        url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=1d&limit={days}"
+        try:
+            resp = requests.get(url, timeout=10)
+            data = resp.json()
+            dates = [datetime.fromtimestamp(c[0]/1000).strftime('%Y-%m-%d') for c in data]
+            values = [float(c[4]) for c in data]
+            if dates and values:
+                return {'dates': dates, 'values': values}
+            return None
+        except:
+            return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            from_date = start_date.strftime('%Y-%m-%d')
-            till_date = end_date.strftime('%Y-%m-%d')
-            url = f"https://iss.moex.com/iss/history/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json?from={from_date}&till={till_date}"
-            try:
-                resp = requests.get(url, timeout=10)
-                data = resp.json()
-                history = data['history']['data']
-                if history:
-                    dates = [row[0] for row in history]
-                    values = [row[1] for row in history]
-                    if dates and values:
-                        return {'dates': dates, 'values': values}
-            except:
-                pass
             ticker = 'IMOEX.ME'
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
-                    return None
-                timestamps = data['chart']['result'][0]['timestamp']
-                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                if valid:
-                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
-            except:
-                return None
         elif symbol == 'SP500':
             ticker = '^GSPC'
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
-                    return None
-                timestamps = data['chart']['result'][0]['timestamp']
-                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                if valid:
-                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+        else:
+            return None
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+        try:
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data = resp.json()
+            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
                 return None
-            except:
-                return None
-        return None
+            timestamps = data['chart']['result'][0]['timestamp']
+            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+            if valid:
+                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+            return None
+        except:
+            return None
     elif asset_type == 'commodity':
         symbol_map = {'GOLD': 'GC=F', 'OIL': 'CL=F'}
-        if symbol in symbol_map:
-            sym = symbol_map[symbol]
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
-                    return None
-                timestamps = data['chart']['result'][0]['timestamp']
-                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                if valid:
-                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+        if symbol not in symbol_map:
+            return None
+        sym = symbol_map[symbol]
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range={days}d&interval=1d"
+        try:
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data = resp.json()
+            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
                 return None
-            except:
-                return None
+            timestamps = data['chart']['result'][0]['timestamp']
+            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+            if valid:
+                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+            return None
+        except:
+            return None
     return None
 
 def generate_chart(data, title, ylabel='Цена', color='blue'):
@@ -362,10 +325,10 @@ def check_alerts():
     new_data = {}
     alerts = []
 
-    rates = get_cbr_rates()
+    rates = get_currency_rates()
     if rates:
         for cur in ['USD', 'EUR', 'CNY']:
-            if cur in rates:
+            if cur in rates and rates[cur]:
                 val = rates[cur]
                 new_data[cur] = val
                 if cur in last and last[cur] != 0:
@@ -541,8 +504,8 @@ def callback_query(call):
 
     # ---------- ОТДЕЛЬНЫЕ КОМАНДЫ ----------
     if call.data == 'currency_usd':
-        rates = get_cbr_rates()
-        if rates and 'USD' in rates:
+        rates = get_currency_rates()
+        if rates and 'USD' in rates and rates['USD']:
             bot.send_message(call.message.chat.id, f"💵 Доллар: {rates['USD']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -550,8 +513,8 @@ def callback_query(call):
         return
 
     if call.data == 'currency_eur':
-        rates = get_cbr_rates()
-        if rates and 'EUR' in rates:
+        rates = get_currency_rates()
+        if rates and 'EUR' in rates and rates['EUR']:
             bot.send_message(call.message.chat.id, f"💶 Евро: {rates['EUR']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -560,7 +523,7 @@ def callback_query(call):
 
     if call.data == 'currency_cny':
         data = get_cny_rate()
-        if data:
+        if data and data['value']:
             bot.send_message(call.message.chat.id, f"🇨🇳 Юань: {data['value']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -725,22 +688,21 @@ def callback_query(call):
 # ---------- ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ----------
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
-    # Если пользователь что-то пишет, просто даём подсказку
     bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
 
 # ---------- ТЕКСТОВЫЕ КОМАНДЫ ----------
 @bot.message_handler(commands=['usd'])
 def cmd_usd(message):
-    rates = get_cbr_rates()
-    if rates and 'USD' in rates:
+    rates = get_currency_rates()
+    if rates and 'USD' in rates and rates['USD']:
         bot.reply_to(message, f"💵 Доллар: {rates['USD']:.2f} ₽", reply_markup=main_menu_button())
     else:
         bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
 
 @bot.message_handler(commands=['eur'])
 def cmd_eur(message):
-    rates = get_cbr_rates()
-    if rates and 'EUR' in rates:
+    rates = get_currency_rates()
+    if rates and 'EUR' in rates and rates['EUR']:
         bot.reply_to(message, f"💶 Евро: {rates['EUR']:.2f} ₽", reply_markup=main_menu_button())
     else:
         bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
@@ -748,7 +710,7 @@ def cmd_eur(message):
 @bot.message_handler(commands=['cny'])
 def cmd_cny(message):
     data = get_cny_rate()
-    if data:
+    if data and data['value']:
         bot.reply_to(message, f"🇨🇳 Юань: {data['value']:.2f} ₽", reply_markup=main_menu_button())
     else:
         bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
