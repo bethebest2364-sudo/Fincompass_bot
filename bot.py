@@ -4,7 +4,6 @@ import re
 import xml.etree.ElementTree as ET
 import json
 import os
-import sqlite3
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
@@ -15,73 +14,6 @@ CHANNEL_ID = -1001657916970
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ---------- БАЗА ДАННЫХ ----------
-DB_PATH = 'portfolio.db'
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS portfolio
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  asset_type TEXT,
-                  symbol TEXT,
-                  quantity REAL,
-                  purchase_price REAL)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def add_asset(user_id, asset_type, symbol, quantity, purchase_price=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO portfolio (user_id, asset_type, symbol, quantity, purchase_price) VALUES (?, ?, ?, ?, ?)",
-              (user_id, asset_type, symbol.upper(), quantity, purchase_price))
-    conn.commit()
-    conn.close()
-
-def get_portfolio(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT asset_type, symbol, quantity, purchase_price FROM portfolio WHERE user_id = ?", (user_id,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def delete_asset(user_id, symbol):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM portfolio WHERE user_id = ? AND symbol = ?", (user_id, symbol.upper()))
-    conn.commit()
-    conn.close()
-
-def clear_portfolio(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM portfolio WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-# ---------- СОСТОЯНИЯ ----------
-user_states = {}
-
-def set_state(user_id, state, data=None):
-    if user_id not in user_states:
-        user_states[user_id] = {}
-    user_states[user_id]['state'] = state
-    user_states[user_id]['data'] = data or {}
-
-def get_state(user_id):
-    return user_states.get(user_id, {}).get('state', 'idle')
-
-def get_state_data(user_id):
-    return user_states.get(user_id, {}).get('data', {})
-
-def clear_state(user_id):
-    if user_id in user_states:
-        del user_states[user_id]
-
 # ---------- КНОПКА ГЛАВНОГО МЕНЮ ----------
 def main_menu_button():
     markup = types.InlineKeyboardMarkup()
@@ -89,16 +21,16 @@ def main_menu_button():
     markup.add(btn)
     return markup
 
-# ---------- ИСПРАВЛЕННАЯ ФУНКЦИЯ КУРСОВ (ЧЕРЕЗ exchangerate.host) ----------
+# ---------- ФУНКЦИИ ДЛЯ API ----------
 def get_cbr_rates():
-    # Используем exchangerate.host для получения курсов к рублю
+    """Получает курсы USD, EUR, CNY к рублю через exchangerate.host"""
     url = "https://api.exchangerate.host/latest?base=USD&symbols=RUB,EUR,CNY"
     try:
         resp = requests.get(url, timeout=10)
         data = resp.json()
-        if data.get('success') is not False:
+        if data.get('success'):
             rates = {}
-            usd_rub = data['rates']['RUB']  # USD/RUB
+            usd_rub = data['rates']['RUB']
             rates['USD'] = usd_rub
             # EUR/RUB = (EUR/USD) * (USD/RUB)
             eur_usd = data['rates']['EUR']
@@ -113,7 +45,6 @@ def get_cbr_rates():
         logging.error(f"Ошибка получения курсов: {e}")
         return None
 
-# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ ----------
 def get_moex_index():
     url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
@@ -253,33 +184,6 @@ def get_stock_quote(ticker):
         return None
     except:
         return None
-
-def get_current_price(asset_type, symbol):
-    if asset_type == 'currency':
-        rates = get_cbr_rates()
-        if rates and symbol in rates:
-            return {'price': rates[symbol], 'currency': 'RUB'}
-        return None
-    elif asset_type == 'crypto':
-        data = get_crypto(symbol.lower())
-        if data:
-            rates = get_cbr_rates()
-            if rates and 'USD' in rates:
-                rub_price = data['usd'] * rates['USD']
-                return {'price': rub_price, 'currency': 'RUB'}
-        return None
-    elif asset_type == 'stock':
-        data = get_stock_quote(symbol)
-        if data:
-            if data['currency'] == 'RUB':
-                return {'price': data['price'], 'currency': 'RUB'}
-            else:
-                rates = get_cbr_rates()
-                if rates and 'USD' in rates:
-                    rub_price = data['price'] * rates['USD']
-                    return {'price': rub_price, 'currency': 'RUB'}
-        return None
-    return None
 
 # ---------- ГРАФИКИ ----------
 def get_historical_data(asset_type, symbol, days=7):
@@ -464,7 +368,7 @@ def check_alerts():
             if cur in rates:
                 val = rates[cur]
                 new_data[cur] = val
-                if cur in last:
+                if cur in last and last[cur] != 0:
                     change = abs(val - last[cur]) / last[cur] * 100
                     if change > 2.0:
                         alerts.append(f"💱 {cur}: изменился на {change:.1f}% (было {last[cur]:.2f}, стало {val:.2f})")
@@ -474,7 +378,7 @@ def check_alerts():
         if data:
             val = data['usd']
             new_data[name] = val
-            if name in last:
+            if name in last and last[name] != 0:
                 change = abs(val - last[name]) / last[name] * 100
                 if change > 5.0:
                     alerts.append(f"₿ {name}: изменился на {change:.1f}% (было ${last[name]:.0f}, стало ${val:.0f})")
@@ -483,7 +387,7 @@ def check_alerts():
     if moex:
         val = moex['value']
         new_data['MOEX'] = val
-        if 'MOEX' in last:
+        if 'MOEX' in last and last['MOEX'] != 0:
             change = abs(val - last['MOEX']) / last['MOEX'] * 100
             if change > 3.0:
                 alerts.append(f"📈 MOEX: изменился на {change:.1f}% (было {last['MOEX']:.2f}, стало {val:.2f})")
@@ -492,7 +396,7 @@ def check_alerts():
     if sp500:
         val = sp500['value']
         new_data['SP500'] = val
-        if 'SP500' in last:
+        if 'SP500' in last and last['SP500'] != 0:
             change = abs(val - last['SP500']) / last['SP500'] * 100
             if change > 3.0:
                 alerts.append(f"🇺🇸 S&P 500: изменился на {change:.1f}% (было {last['SP500']:.2f}, стало {val:.2f})")
@@ -501,7 +405,7 @@ def check_alerts():
     if gold:
         val = gold['usd']
         new_data['GOLD'] = val
-        if 'GOLD' in last:
+        if 'GOLD' in last and last['GOLD'] != 0:
             change = abs(val - last['GOLD']) / last['GOLD'] * 100
             if change > 3.0:
                 alerts.append(f"🏆 Золото: изменилось на {change:.1f}% (было ${last['GOLD']:.2f}, стало ${val:.2f})")
@@ -510,7 +414,7 @@ def check_alerts():
     if oil:
         val = oil['price']
         new_data['OIL'] = val
-        if 'OIL' in last:
+        if 'OIL' in last and last['OIL'] != 0:
             change = abs(val - last['OIL']) / last['OIL'] * 100
             if change > 3.0:
                 alerts.append(f"🛢 Нефть: изменилась на {change:.1f}% (было ${last['OIL']:.2f}, стало ${val:.2f})")
@@ -544,8 +448,7 @@ def start(message):
             types.InlineKeyboardButton("📊 Индексы", callback_data='indices'),
             types.InlineKeyboardButton("🏭 Сырьё", callback_data='commodities'),
             types.InlineKeyboardButton("🔑 Ключевая ставка", callback_data='keyrate'),
-            types.InlineKeyboardButton("📰 Новости", callback_data='news'),
-            types.InlineKeyboardButton("📊 Мой портфель", callback_data='portfolio')
+            types.InlineKeyboardButton("📰 Новости", callback_data='news')
         )
         bot.send_message(
             message.chat.id,
@@ -556,8 +459,7 @@ def start(message):
             "• Проверить индекс МосБиржи и S&P 500\n"
             "• Посмотреть цену золота, нефти, биткоина\n"
             "• Получить свежие новости\n"
-            "• Построить график за 7 дней\n"
-            "• 📊 *Вести свой инвестиционный портфель* — добавляйте активы и следите за доходностью\n\n"
+            "• Построить график за 7 дней\n\n"
             "Выберите нужный раздел ниже или введите команду.\n\n"
             "🔹 Команды: /usd, /moex, /gold, /oil, /news, /stock AAPL и другие.\n"
             "🔹 Полный список — /help.\n\n"
@@ -570,67 +472,6 @@ def start(message):
         markup.add(types.InlineKeyboardButton("📢 Подписаться", url="https://t.me/FinKompass"))
         markup.add(types.InlineKeyboardButton("🔄 Проверить", callback_data='check_sub'))
         bot.send_message(message.chat.id, "❌ Подпишись на канал, чтобы пользоваться ботом!", reply_markup=markup)
-
-# ---------- ПОРТФЕЛЬ (ПОКАЗ) ----------
-def show_portfolio(message, user_id):
-    rows = get_portfolio(user_id)
-    if not rows:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("➕ Добавить актив", callback_data='add_asset'))
-        markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu'))
-        bot.send_message(
-            message.chat.id,
-            "📭 Ваш портфель пуст. Добавьте активы.",
-            reply_markup=markup
-        )
-        return
-
-    total_rub = 0
-    total_invested = 0
-    text = "📊 *Ваш портфель:*\n\n"
-    for asset_type, symbol, quantity, purchase_price in rows:
-        price_data = get_current_price(asset_type, symbol)
-        if not price_data:
-            text += f"• {symbol}: данные недоступны\n"
-            continue
-        current_price = price_data['price']
-        current_value = current_price * quantity
-        total_rub += current_value
-
-        if purchase_price is not None:
-            invested = purchase_price * quantity
-            total_invested += invested
-            profit = current_value - invested
-            profit_percent = (profit / invested) * 100 if invested != 0 else 0
-            sign = "+" if profit >= 0 else ""
-            text += f"• {symbol}: {quantity} шт. × {current_price:.2f} ₽ = {current_value:.2f} ₽\n"
-            text += f"  Доходность: {sign}{profit_percent:.2f}% ({sign}{profit:.2f} ₽)\n"
-        else:
-            text += f"• {symbol}: {quantity} шт. × {current_price:.2f} ₽ = {current_value:.2f} ₽\n"
-
-    text += f"\n💵 *Общая стоимость портфеля:* {total_rub:.2f} ₽"
-    if total_invested > 0:
-        total_profit = total_rub - total_invested
-        total_profit_percent = (total_profit / total_invested) * 100
-        sign = "+" if total_profit >= 0 else ""
-        text += f"\n📈 *Общая доходность:* {sign}{total_profit_percent:.2f}% ({sign}{total_profit:.2f} ₽)"
-    else:
-        text += "\n📈 *Доходность:* данные о покупке не указаны для некоторых активов"
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("➕ Добавить актив", callback_data='add_asset'),
-        types.InlineKeyboardButton("🗑 Удалить актив", callback_data='delete_asset_show')
-    )
-    markup.add(types.InlineKeyboardButton("🧹 Очистить всё", callback_data='clear_portfolio'))
-    markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu'))
-    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
-
-# ---------- КОМАНДА ДЛЯ ОЧИСТКИ ПОРТФЕЛЯ (текстовая) ----------
-@bot.message_handler(commands=['clearportfolio'])
-def cmd_clearportfolio(message):
-    clear_portfolio(message.from_user.id)
-    bot.reply_to(message, "🗑 Ваш портфель полностью очищен. Вы можете добавлять активы заново.")
 
 # ---------- ЕДИНЫЙ ОБРАБОТЧИК CALLBACK ----------
 @bot.callback_query_handler(func=lambda call: True)
@@ -695,121 +536,6 @@ def callback_query(call):
             types.InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')
         )
         bot.edit_message_text("Выберите товар или график:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        bot.answer_callback_query(call.id)
-        return
-
-    # ---------- ПОРТФЕЛЬ ----------
-    if call.data == 'portfolio':
-        show_portfolio(call.message, call.from_user.id)
-        bot.answer_callback_query(call.id)
-        return
-
-    # Добавление актива: выбор тикера
-    if call.data == 'add_asset':
-        set_state(call.from_user.id, 'add_ticker')
-        markup = types.InlineKeyboardMarkup(row_width=3)
-        popular = ['BTC', 'ETH', 'AAPL', 'SBER.ME', 'USD', 'EUR', 'CNY']
-        buttons = [types.InlineKeyboardButton(t, callback_data=f'quick_ticker_{t}') for t in popular]
-        markup.add(*buttons)
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data='cancel_add'))
-        bot.send_message(
-            call.message.chat.id,
-            "📝 Введите тикер актива (например, BTC, AAPL, USD) или выберите из популярных:",
-            reply_markup=markup
-        )
-        bot.answer_callback_query(call.id)
-        return
-
-    # Быстрый выбор популярного тикера
-    if call.data.startswith('quick_ticker_'):
-        ticker = call.data.split('_')[2]
-        # Определяем тип актива
-        stock_data = get_stock_quote(ticker)
-        if stock_data:
-            asset_type = 'stock'
-        elif ticker in ['BTC', 'ETH']:
-            crypto_data = get_crypto(ticker.lower())
-            if not crypto_data:
-                bot.answer_callback_query(call.id, f"❌ Не удалось получить данные для {ticker}.")
-                return
-            asset_type = 'crypto'
-        else:
-            rates = get_cbr_rates()
-            if rates and ticker in rates:
-                asset_type = 'currency'
-            else:
-                bot.answer_callback_query(call.id, f"❌ Неизвестный тикер {ticker}.")
-                return
-        set_state(call.from_user.id, 'add_quantity', {'ticker': ticker, 'asset_type': asset_type})
-        bot.send_message(call.message.chat.id, f"Введите количество {ticker} (например, 0.5):")
-        bot.answer_callback_query(call.id)
-        return
-
-    # Кнопка "Пропустить" (при запросе цены)
-    if call.data == 'skip_price':
-        user_id = call.from_user.id
-        data = get_state_data(user_id)
-        if not data or 'ticker' not in data or 'quantity' not in data or 'asset_type' not in data:
-            bot.answer_callback_query(call.id, "Ошибка: данные не найдены. Попробуйте заново.")
-            clear_state(user_id)
-            return
-        add_asset(user_id, data['asset_type'], data['ticker'], data['quantity'], None)
-        clear_state(user_id)
-        bot.answer_callback_query(call.id, "Цена покупки пропущена.")
-        bot.send_message(call.message.chat.id, f"✅ {data['ticker']} добавлен в портфель.")
-        show_portfolio(call.message, user_id)
-        return
-
-    # Кнопка "Отмена" (при добавлении)
-    if call.data == 'cancel_add':
-        clear_state(call.from_user.id)
-        bot.answer_callback_query(call.id, "Добавление отменено.")
-        bot.send_message(call.message.chat.id, "❌ Добавление отменено.")
-        show_portfolio(call.message, call.from_user.id)
-        return
-
-    # ---------- УДАЛЕНИЕ АКТИВОВ ----------
-    if call.data.startswith('delete_asset_'):
-        symbol = call.data.split('_')[2]
-        delete_asset(call.from_user.id, symbol)
-        bot.answer_callback_query(call.id, f"🗑 {symbol} удалён из портфеля.")
-        show_portfolio(call.message, call.from_user.id)
-        return
-
-    if call.data == 'clear_portfolio':
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Да, очистить", callback_data='confirm_clear'))
-        markup.add(types.InlineKeyboardButton("❌ Нет, отмена", callback_data='portfolio'))
-        bot.edit_message_text(
-            "⚠️ Вы уверены, что хотите очистить весь портфель?",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-        bot.answer_callback_query(call.id)
-        return
-
-    if call.data == 'confirm_clear':
-        clear_portfolio(call.from_user.id)
-        bot.answer_callback_query(call.id, "🗑 Портфель очищен.")
-        show_portfolio(call.message, call.from_user.id)
-        return
-
-    if call.data == 'delete_asset_show':
-        rows = get_portfolio(call.from_user.id)
-        if not rows:
-            bot.answer_callback_query(call.id, "Портфель пуст.")
-            return
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        for asset_type, symbol, quantity, purchase_price in rows:
-            markup.add(types.InlineKeyboardButton(f"🗑 {symbol}", callback_data=f'delete_asset_{symbol}'))
-        markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data='portfolio'))
-        bot.edit_message_text(
-            "Выберите актив для удаления:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
         bot.answer_callback_query(call.id)
         return
 
@@ -982,8 +708,7 @@ def callback_query(call):
             types.InlineKeyboardButton("📊 Индексы", callback_data='indices'),
             types.InlineKeyboardButton("🏭 Сырьё", callback_data='commodities'),
             types.InlineKeyboardButton("🔑 Ключевая ставка", callback_data='keyrate'),
-            types.InlineKeyboardButton("📰 Новости", callback_data='news'),
-            types.InlineKeyboardButton("📊 Мой портфель", callback_data='portfolio')
+            types.InlineKeyboardButton("📰 Новости", callback_data='news')
         )
         bot.edit_message_text(
             "✅ Главное меню:\nВыберите нужный раздел.",
@@ -1000,81 +725,8 @@ def callback_query(call):
 # ---------- ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ----------
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
-    user_id = message.from_user.id
-    state = get_state(user_id)
-    text = message.text.strip()
-
-    if state == 'add_ticker':
-        ticker = text.upper()
-        if not ticker:
-            bot.reply_to(message, "❌ Введите корректный тикер.")
-            return
-        # Проверяем, что тикер существует
-        stock_data = get_stock_quote(ticker)
-        if stock_data:
-            asset_type = 'stock'
-        elif ticker in ['BTC', 'ETH']:
-            crypto_data = get_crypto(ticker.lower())
-            if not crypto_data:
-                bot.reply_to(message, f"❌ Не удалось получить данные для {ticker}.")
-                return
-            asset_type = 'crypto'
-        else:
-            rates = get_cbr_rates()
-            if rates and ticker in rates:
-                asset_type = 'currency'
-            else:
-                bot.reply_to(message, f"❌ Неизвестный тикер {ticker}. Попробуйте снова или выберите из популярных.")
-                return
-        set_state(user_id, 'add_quantity', {'ticker': ticker, 'asset_type': asset_type})
-        bot.reply_to(message, f"Введите количество {ticker} (например, 0.5):")
-
-    elif state == 'add_quantity':
-        try:
-            quantity = float(text)
-        except ValueError:
-            bot.reply_to(message, "❌ Введите число (например, 0.5)")
-            return
-        data = get_state_data(user_id)
-        data['quantity'] = quantity
-        set_state(user_id, 'add_price', data)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⏩ Пропустить", callback_data='skip_price'))
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data='cancel_add'))
-        bot.reply_to(
-            message,
-            f"Введите цену покупки за 1 {data['ticker']} (необязательно). Если пропустите, доходность считаться не будет.\n"
-            "Введите число или нажмите 'Пропустить'.",
-            reply_markup=markup
-        )
-
-    elif state == 'add_price':
-        data = get_state_data(user_id)
-        if not data or 'asset_type' not in data:
-            bot.reply_to(message, "❌ Ошибка: данные не найдены. Попробуйте заново через кнопку 'Добавить актив'.")
-            clear_state(user_id)
-            return
-        # Пытаемся распарсить число
-        try:
-            purchase_price = float(text)
-            add_asset(user_id, data['asset_type'], data['ticker'], data['quantity'], purchase_price)
-            clear_state(user_id)
-            bot.reply_to(message, f"✅ {data['ticker']} добавлен в портфель с ценой {purchase_price}.")
-            show_portfolio(message, user_id)
-            return
-        except ValueError:
-            if text.lower() == 'пропустить':
-                add_asset(user_id, data['asset_type'], data['ticker'], data['quantity'], None)
-                clear_state(user_id)
-                bot.reply_to(message, f"✅ {data['ticker']} добавлен в портфель без цены покупки.")
-                show_portfolio(message, user_id)
-                return
-            else:
-                bot.reply_to(message, "❌ Введите число или нажмите 'Пропустить'.")
-                return
-
-    else:
-        bot.reply_to(message, "Используйте кнопки для управления ботом или команду /start для главного меню.")
+    # Если пользователь что-то пишет, просто даём подсказку
+    bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
 
 # ---------- ТЕКСТОВЫЕ КОМАНДЫ ----------
 @bot.message_handler(commands=['usd'])
@@ -1190,9 +842,8 @@ def cmd_help(message):
         "Доступные команды:\n"
         "/usd, /eur, /cny, /btc, /eth\n"
         "/moex, /sp500, /gold, /oil, /keyrate, /news\n"
-        "/stock [тикер], /help\n"
-        "/clearportfolio — очистить портфель\n\n"
-        "📊 Для управления портфелем используйте кнопку 'Мой портфель' в главном меню.",
+        "/stock [тикер], /help\n\n"
+        "Используйте кнопки в меню для быстрого доступа.",
         reply_markup=main_menu_button()
     )
 
