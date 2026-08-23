@@ -42,18 +42,16 @@ def get_currency_rates():
     else:
         return None
 
+# MOEX через официальный API МосБиржи
 def get_moex_index():
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/IMOEX.ME?range=1d&interval=1d"
+    url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
-        resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        resp = requests.get(url, timeout=10)
         data = resp.json()
-        meta = data['chart']['result'][0]['meta']
-        price = meta.get('regularMarketPrice')
-        previous_close = meta.get('previousClose')
-        if price and previous_close:
-            change = ((price - previous_close) / previous_close) * 100
-            return {'value': round(price, 2), 'change': round(change, 2)}
-        return None
+        row = data['marketdata']['data'][0]
+        # row: [TRADEDATE, TIME, CLOSE, OPEN, HIGH, LOW, NUMTRADES, VALUE, VOLUME, ...]
+        # CLOSE - индекс закрытия, CHANGE - изменение в процентах
+        return {'value': row[2], 'change': row[5]}
     except:
         return None
 
@@ -194,8 +192,7 @@ def get_stock_quote(ticker):
 def get_historical_data(asset_type, symbol, days=7):
     if asset_type == 'currency':
         if symbol == 'CNY':
-            # Для CNY используем кросс-курс через Yahoo Finance
-            # Получаем историю USD/RUB
+            # Кросс-курс через USD/RUB и USD/CNY
             ticker_usd_rub = 'USDRUB=X'
             url_usd_rub = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_rub}?range={days}d&interval=1d"
             resp_usd_rub = requests.get(url_usd_rub, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
@@ -209,7 +206,6 @@ def get_historical_data(asset_type, symbol, days=7):
             if not valid_usd_rub:
                 return None
 
-            # Получаем историю USD/CNY
             ticker_usd_cny = 'USDCNY=X'
             url_usd_cny = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_cny}?range={days}d&interval=1d"
             resp_usd_cny = requests.get(url_usd_cny, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
@@ -223,7 +219,6 @@ def get_historical_data(asset_type, symbol, days=7):
             if not valid_usd_cny:
                 return None
 
-            # Объединяем по датам и вычисляем CNY/RUB
             dates_common = sorted(set([d for d, _ in valid_usd_rub]) & set([d for d, _ in valid_usd_cny]))
             if not dates_common:
                 return None
@@ -242,7 +237,7 @@ def get_historical_data(asset_type, symbol, days=7):
                 return None
             return {'dates': [d for d, _ in valid_values], 'values': [v for _, v in valid_values]}
         else:
-            # Для USD и EUR используем Yahoo Finance
+            # USD и EUR через Yahoo Finance
             symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X'}
             if symbol not in symbol_map:
                 return None
@@ -280,26 +275,44 @@ def get_historical_data(asset_type, symbol, days=7):
             return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            ticker = 'IMOEX.ME'
-        elif symbol == 'SP500':
-            ticker = '^GSPC'
-        else:
-            return None
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-        try:
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data = resp.json()
-            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+            # MOEX через официальный API МосБиржи (история)
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            from_date = start_date.strftime('%Y-%m-%d')
+            till_date = end_date.strftime('%Y-%m-%d')
+            url = f"https://iss.moex.com/iss/history/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json?from={from_date}&till={till_date}"
+            try:
+                resp = requests.get(url, timeout=10)
+                data = resp.json()
+                history = data['history']['data']
+                if history:
+                    # history row: [TRADEDATE, CLOSE, OPEN, HIGH, LOW, ...]
+                    dates = [row[0] for row in history]
+                    values = [row[1] for row in history]
+                    if dates and values:
+                        return {'dates': dates, 'values': values}
                 return None
-            timestamps = data['chart']['result'][0]['timestamp']
-            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-            if valid:
-                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-            return None
-        except:
-            return None
+            except:
+                return None
+        elif symbol == 'SP500':
+            # S&P 500 через Yahoo Finance
+            ticker = '^GSPC'
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+            try:
+                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                data = resp.json()
+                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+                    return None
+                timestamps = data['chart']['result'][0]['timestamp']
+                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+                if valid:
+                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+                return None
+            except:
+                return None
+        return None
     elif asset_type == 'commodity':
         symbol_map = {'GOLD': 'GC=F', 'OIL': 'CL=F'}
         if symbol not in symbol_map:
@@ -542,7 +555,7 @@ def cmd_moex(message):
         sign = "+" if data['change'] >= 0 else ""
         bot.reply_to(message, f"📈 MOEX: {data['value']:.2f} ({sign}{data['change']:.2f}%)", reply_markup=main_menu_button())
     else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+        bot.reply_to(message, "❌ Ошибка индекса.", reply_markup=main_menu_button())
 
 @bot.message_handler(commands=['sp500'])
 def cmd_sp500(message):
@@ -551,7 +564,7 @@ def cmd_sp500(message):
         sign = "+" if data['change'] >= 0 else ""
         bot.reply_to(message, f"🇺🇸 S&P 500: {data['value']} ({sign}{data['change']}%)", reply_markup=main_menu_button())
     else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+        bot.reply_to(message, "❌ Ошибка S&P 500.", reply_markup=main_menu_button())
 
 @bot.message_handler(commands=['gold'])
 def cmd_gold(message):
