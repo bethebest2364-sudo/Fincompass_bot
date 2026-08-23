@@ -42,6 +42,7 @@ def get_currency_rates():
         return None
 
 def get_moex_index():
+    # текущее значение индекса через ISS (оно работает корректно)
     url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
         resp = requests.get(url, timeout=10)
@@ -278,57 +279,27 @@ def get_historical_data(asset_type, symbol, days=7):
             return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            # Сначала пробуем официальный API МосБиржи
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            from_date = start_date.strftime('%Y-%m-%d')
-            till_date = end_date.strftime('%Y-%m-%d')
-            url = f"https://iss.moex.com/iss/history/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json?from={from_date}&till={till_date}"
-            try:
-                resp = requests.get(url, timeout=10)
-                data = resp.json()
-                history = data['history']['data']
-                if history:
-                    dates = [row[0] for row in history]
-                    values = [row[1] for row in history]  # CLOSE
-                    if dates and values:
-                        return {'dates': dates, 'values': values}
-            except:
-                pass
-            # Если API МосБиржи не дал данных, пробуем Yahoo
+            # Для MOEX используем только Yahoo Finance (корректные значения и даты)
             ticker = 'IMOEX.ME'
-            url_yahoo = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp_yahoo = requests.get(url_yahoo, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data_yahoo = resp_yahoo.json()
-                if 'chart' in data_yahoo and 'result' in data_yahoo['chart'] and data_yahoo['chart']['result']:
-                    timestamps = data_yahoo['chart']['result'][0]['timestamp']
-                    close = data_yahoo['chart']['result'][0]['indicators']['quote'][0]['close']
-                    dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                    valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                    if valid:
-                        return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
-            except:
-                return None
         elif symbol == 'SP500':
             ticker = '^GSPC'
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
-                    return None
-                timestamps = data['chart']['result'][0]['timestamp']
-                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                if valid:
-                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+        else:
+            return None
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+        try:
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            data = resp.json()
+            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
                 return None
-            except:
-                return None
-        return None
+            timestamps = data['chart']['result'][0]['timestamp']
+            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+            if valid:
+                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
+            return None
+        except:
+            return None
     elif asset_type == 'commodity':
         symbol_map = {'GOLD': 'GC=F', 'OIL': 'CL=F'}
         if symbol not in symbol_map:
