@@ -89,23 +89,28 @@ def main_menu_button():
     markup.add(btn)
     return markup
 
-# ---------- ИСПРАВЛЕННАЯ ФУНКЦИЯ КУРСОВ (УЧЁТ НОМИНАЛА) ----------
+# ---------- ИСПРАВЛЕННАЯ ФУНКЦИЯ КУРСОВ (ЧЕРЕЗ exchangerate.host) ----------
 def get_cbr_rates():
-    url = "https://www.cbr.ru/scripts/XML_daily.asp"
+    # Используем exchangerate.host для получения курсов к рублю
+    url = "https://api.exchangerate.host/latest?base=USD&symbols=RUB,EUR,CNY"
     try:
         resp = requests.get(url, timeout=10)
-        resp.encoding = 'windows-1251'
-        root = ET.fromstring(resp.text)
-        rates = {}
-        for valute in root.findall('Valute'):
-            code = valute.find('CharCode').text
-            value = valute.find('Value').text.replace(',', '.')
-            nominal = valute.find('Nominal').text
-            # Ключевое исправление: делим на номинал
-            rates[code] = float(value) / float(nominal)
-        return rates
+        data = resp.json()
+        if data.get('success') is not False:
+            rates = {}
+            usd_rub = data['rates']['RUB']  # USD/RUB
+            rates['USD'] = usd_rub
+            # EUR/RUB = (EUR/USD) * (USD/RUB)
+            eur_usd = data['rates']['EUR']
+            rates['EUR'] = eur_usd * usd_rub
+            # CNY/RUB = (CNY/USD) * (USD/RUB)
+            cny_usd = data['rates']['CNY']
+            rates['CNY'] = cny_usd * usd_rub
+            return rates
+        else:
+            return None
     except Exception as e:
-        logging.error(f"Ошибка получения курсов ЦБ: {e}")
+        logging.error(f"Ошибка получения курсов: {e}")
         return None
 
 # ---------- ОСТАЛЬНЫЕ ФУНКЦИИ ----------
