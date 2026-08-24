@@ -10,7 +10,7 @@ import telebot
 from telebot import types
 
 BOT_TOKEN = "8803016019:AAGZPApeEG0jqEwua8nK49tL582f3Rftvy8"
-CHANNEL_ID = -1001657916970
+CHANNEL_ID = -1001657916970   # ваш числовой ID канала
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -21,60 +21,34 @@ def main_menu_button():
     markup.add(btn)
     return markup
 
-# ---------- ФУНКЦИИ ДЛЯ API ----------
-def get_currency_rates():
-    symbols = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X', 'CNY': 'CNYRUB=X'}
-    rates = {}
-    for code, ticker in symbols.items():
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data = resp.json()
-            meta = data['chart']['result'][0]['meta']
-            price = meta.get('regularMarketPrice')
-            if price:
-                rates[code] = price
-        except:
-            rates[code] = None
-    if any(rates.values()):
-        return rates
-    else:
+# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений) ----------
+def get_cbr_rates():
+    url = "https://api.exchangerate.host/latest?base=USD&symbols=RUB,EUR,CNY"
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get('success'):
+            rates = {}
+            usd_rub = data['rates']['RUB']
+            rates['USD'] = usd_rub
+            eur_usd = data['rates']['EUR']
+            rates['EUR'] = eur_usd * usd_rub
+            cny_usd = data['rates']['CNY']
+            rates['CNY'] = cny_usd * usd_rub
+            return rates
+        else:
+            return None
+    except Exception as e:
+        logging.error(f"Ошибка получения курсов: {e}")
         return None
 
-# ---------- MOEX через Yahoo Finance (основной) ----------
 def get_moex_index():
-    # Основной источник: Yahoo Finance
+    url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
     try:
-        ticker = 'IMOEX.ME'
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
-        resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-        data = resp.json()
-        meta = data['chart']['result'][0]['meta']
-        price = meta.get('regularMarketPrice')
-        previous_close = meta.get('previousClose')
-        if price:
-            if previous_close:
-                change = ((price - previous_close) / previous_close) * 100
-            else:
-                change = 0
-            return {'value': round(price, 2), 'change': round(change, 2)}
-    except:
-        pass
-
-    # Запасной источник: ISS (на случай, если Yahoo не работает)
-    try:
-        url = "https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json"
         resp = requests.get(url, timeout=10)
         data = resp.json()
         row = data['marketdata']['data'][0]
-        # row: [TRADEDATE, TIME, CLOSE, OPEN, HIGH, LOW, ...]
-        value = row[2]
-        change = row[5] if len(row) > 5 else 0
-        # Проверяем, что значение адекватное (больше 100)
-        if value > 100:
-            return {'value': value, 'change': change}
-        else:
-            return None
+        return {'value': row[2], 'change': row[5]}
     except:
         return None
 
@@ -128,7 +102,7 @@ def get_gold_price():
         meta = data['chart']['result'][0]['meta']
         price_usd = meta.get('regularMarketPrice')
         if price_usd:
-            rates = get_currency_rates()
+            rates = get_cbr_rates()
             if rates and 'USD' in rates:
                 rub_rate = rates['USD']
                 price_rub = price_usd * rub_rate
@@ -152,7 +126,7 @@ def get_oil_price():
         return None
 
 def get_cny_rate():
-    rates = get_currency_rates()
+    rates = get_cbr_rates()
     if rates and 'CNY' in rates:
         return {'value': rates['CNY']}
     return None
@@ -166,14 +140,10 @@ def get_sp500():
         meta = data['chart']['result'][0]['meta']
         price = meta.get('regularMarketPrice')
         previous_close = meta.get('previousClose')
-        if price:
-            if previous_close:
-                change = ((price - previous_close) / previous_close) * 100
-            else:
-                change = 0
+        if price and previous_close:
+            change = ((price - previous_close) / previous_close) * 100
             return {'value': round(price, 2), 'change': round(change, 2)}
-        else:
-            return None
+        return None
     except:
         return None
 
@@ -211,10 +181,7 @@ def get_stock_quote(ticker):
                 'change': round(change, 2),
                 'currency': currency
             }
-        elif regular_market_price:
-            return {'price': round(regular_market_price, 2), 'change': 0, 'currency': meta.get('currency', 'USD')}
-        else:
-            return None
+        return None
     except:
         return None
 
@@ -222,52 +189,21 @@ def get_stock_quote(ticker):
 def get_historical_data(asset_type, symbol, days=7):
     if asset_type == 'currency':
         if symbol == 'CNY':
-            # Кросс-курс через USD/RUB и USD/CNY
-            ticker_usd_rub = 'USDRUB=X'
-            url_usd_rub = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_rub}?range={days}d&interval=1d"
-            resp_usd_rub = requests.get(url_usd_rub, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data_usd_rub = resp_usd_rub.json()
-            if 'chart' not in data_usd_rub or 'result' not in data_usd_rub['chart'] or not data_usd_rub['chart']['result']:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            url = f"https://api.exchangerate.host/timeseries?start_date={start_date.date()}&end_date={end_date.date()}&base=CNY&symbols=RUB"
+            try:
+                resp = requests.get(url, timeout=10)
+                data = resp.json()
+                if data.get('rates'):
+                    dates = sorted(data['rates'].keys())
+                    values = [data['rates'][d]['RUB'] for d in dates]
+                    if dates and values:
+                        return {'dates': dates, 'values': values}
                 return None
-            timestamps_usd_rub = data_usd_rub['chart']['result'][0]['timestamp']
-            close_usd_rub = data_usd_rub['chart']['result'][0]['indicators']['quote'][0]['close']
-            dates_usd_rub = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps_usd_rub]
-            valid_usd_rub = [(d, c) for d, c in zip(dates_usd_rub, close_usd_rub) if c is not None]
-            if not valid_usd_rub:
+            except:
                 return None
-
-            ticker_usd_cny = 'USDCNY=X'
-            url_usd_cny = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_usd_cny}?range={days}d&interval=1d"
-            resp_usd_cny = requests.get(url_usd_cny, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data_usd_cny = resp_usd_cny.json()
-            if 'chart' not in data_usd_cny or 'result' not in data_usd_cny['chart'] or not data_usd_cny['chart']['result']:
-                return None
-            timestamps_usd_cny = data_usd_cny['chart']['result'][0]['timestamp']
-            close_usd_cny = data_usd_cny['chart']['result'][0]['indicators']['quote'][0]['close']
-            dates_usd_cny = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps_usd_cny]
-            valid_usd_cny = [(d, c) for d, c in zip(dates_usd_cny, close_usd_cny) if c is not None]
-            if not valid_usd_cny:
-                return None
-
-            dates_common = sorted(set([d for d, _ in valid_usd_rub]) & set([d for d, _ in valid_usd_cny]))
-            if not dates_common:
-                return None
-            dict_usd_rub = {d: c for d, c in valid_usd_rub}
-            dict_usd_cny = {d: c for d, c in valid_usd_cny}
-            values = []
-            for d in dates_common:
-                usd_rub = dict_usd_rub[d]
-                usd_cny = dict_usd_cny[d]
-                if usd_cny != 0:
-                    values.append(usd_rub / usd_cny)
-                else:
-                    values.append(None)
-            valid_values = [(d, v) for d, v in zip(dates_common, values) if v is not None]
-            if not valid_values:
-                return None
-            return {'dates': [d for d, _ in valid_values], 'values': [v for _, v in valid_values]}
         else:
-            # USD и EUR через Yahoo Finance
             symbol_map = {'USD': 'USDRUB=X', 'EUR': 'EURRUB=X'}
             if symbol not in symbol_map:
                 return None
@@ -289,42 +225,21 @@ def get_historical_data(asset_type, symbol, days=7):
                 return None
     elif asset_type == 'crypto':
         symbol_map = {'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT'}
-        if symbol not in symbol_map:
-            return None
-        sym = symbol_map[symbol]
-        url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=1d&limit={days}"
-        try:
-            resp = requests.get(url, timeout=10)
-            data = resp.json()
-            dates = [datetime.fromtimestamp(c[0]/1000).strftime('%Y-%m-%d') for c in data]
-            values = [float(c[4]) for c in data]
-            if dates and values:
-                return {'dates': dates, 'values': values}
-            return None
-        except:
-            return None
+        if symbol in symbol_map:
+            sym = symbol_map[symbol]
+            url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=1d&limit={days}"
+            try:
+                resp = requests.get(url, timeout=10)
+                data = resp.json()
+                dates = [datetime.fromtimestamp(c[0]/1000).strftime('%Y-%m-%d') for c in data]
+                values = [float(c[4]) for c in data]
+                if dates and values:
+                    return {'dates': dates, 'values': values}
+                return None
+            except:
+                return None
     elif asset_type == 'index':
         if symbol == 'MOEX':
-            # Основной источник: Yahoo Finance
-            ticker = 'IMOEX.ME'
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-            try:
-                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-                data = resp.json()
-                if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
-                    timestamps = data['chart']['result'][0]['timestamp']
-                    close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-                    dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-                    valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-                    if valid and len(valid) > 1:
-                        # Проверяем, что значения реалистичные (больше 100)
-                        avg = sum(v for _, v in valid) / len(valid)
-                        if avg > 100:
-                            return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-            except:
-                pass
-
-            # Запасной источник: ISS
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             from_date = start_date.strftime('%Y-%m-%d')
@@ -336,15 +251,12 @@ def get_historical_data(asset_type, symbol, days=7):
                 history = data['history']['data']
                 if history:
                     dates = [row[0] for row in history]
-                    values = [row[1] for row in history]  # CLOSE
+                    values = [row[1] for row in history]
                     if dates and values:
-                        avg = sum(values) / len(values)
-                        if avg > 100:
-                            return {'dates': dates, 'values': values}
+                        return {'dates': dates, 'values': values}
+                return None
             except:
-                pass
-            return None
-
+                return None
         elif symbol == 'SP500':
             ticker = '^GSPC'
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
@@ -365,24 +277,23 @@ def get_historical_data(asset_type, symbol, days=7):
         return None
     elif asset_type == 'commodity':
         symbol_map = {'GOLD': 'GC=F', 'OIL': 'CL=F'}
-        if symbol not in symbol_map:
-            return None
-        sym = symbol_map[symbol]
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range={days}d&interval=1d"
-        try:
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            data = resp.json()
-            if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+        if symbol in symbol_map:
+            sym = symbol_map[symbol]
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range={days}d&interval=1d"
+            try:
+                resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                data = resp.json()
+                if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+                    return None
+                timestamps = data['chart']['result'][0]['timestamp']
+                close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+                dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
+                valid = [(d, c) for d, c in zip(dates, close) if c is not None]
+                if valid:
+                    return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
                 return None
-            timestamps = data['chart']['result'][0]['timestamp']
-            close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-            dates = [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps]
-            valid = [(d, c) for d, c in zip(dates, close) if c is not None]
-            if valid:
-                return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-            return None
-        except:
-            return None
+            except:
+                return None
     return None
 
 def generate_chart(data, title, ylabel='Цена', color='blue'):
@@ -436,13 +347,13 @@ def check_alerts():
     new_data = {}
     alerts = []
 
-    rates = get_currency_rates()
+    rates = get_cbr_rates()
     if rates:
         for cur in ['USD', 'EUR', 'CNY']:
-            if cur in rates and rates[cur]:
+            if cur in rates:
                 val = rates[cur]
                 new_data[cur] = val
-                if cur in last and last[cur] != 0:
+                if cur in last:
                     change = abs(val - last[cur]) / last[cur] * 100
                     if change > 2.0:
                         alerts.append(f"💱 {cur}: изменился на {change:.1f}% (было {last[cur]:.2f}, стало {val:.2f})")
@@ -452,7 +363,7 @@ def check_alerts():
         if data:
             val = data['usd']
             new_data[name] = val
-            if name in last and last[name] != 0:
+            if name in last:
                 change = abs(val - last[name]) / last[name] * 100
                 if change > 5.0:
                     alerts.append(f"₿ {name}: изменился на {change:.1f}% (было ${last[name]:.0f}, стало ${val:.0f})")
@@ -461,7 +372,7 @@ def check_alerts():
     if moex:
         val = moex['value']
         new_data['MOEX'] = val
-        if 'MOEX' in last and last['MOEX'] != 0:
+        if 'MOEX' in last:
             change = abs(val - last['MOEX']) / last['MOEX'] * 100
             if change > 3.0:
                 alerts.append(f"📈 MOEX: изменился на {change:.1f}% (было {last['MOEX']:.2f}, стало {val:.2f})")
@@ -470,7 +381,7 @@ def check_alerts():
     if sp500:
         val = sp500['value']
         new_data['SP500'] = val
-        if 'SP500' in last and last['SP500'] != 0:
+        if 'SP500' in last:
             change = abs(val - last['SP500']) / last['SP500'] * 100
             if change > 3.0:
                 alerts.append(f"🇺🇸 S&P 500: изменился на {change:.1f}% (было {last['SP500']:.2f}, стало {val:.2f})")
@@ -479,7 +390,7 @@ def check_alerts():
     if gold:
         val = gold['usd']
         new_data['GOLD'] = val
-        if 'GOLD' in last and last['GOLD'] != 0:
+        if 'GOLD' in last:
             change = abs(val - last['GOLD']) / last['GOLD'] * 100
             if change > 3.0:
                 alerts.append(f"🏆 Золото: изменилось на {change:.1f}% (было ${last['GOLD']:.2f}, стало ${val:.2f})")
@@ -488,7 +399,7 @@ def check_alerts():
     if oil:
         val = oil['price']
         new_data['OIL'] = val
-        if 'OIL' in last and last['OIL'] != 0:
+        if 'OIL' in last:
             change = abs(val - last['OIL']) / last['OIL'] * 100
             if change > 3.0:
                 alerts.append(f"🛢 Нефть: изменилась на {change:.1f}% (было ${last['OIL']:.2f}, стало ${val:.2f})")
@@ -547,133 +458,9 @@ def start(message):
         markup.add(types.InlineKeyboardButton("🔄 Проверить", callback_data='check_sub'))
         bot.send_message(message.chat.id, "❌ Подпишись на канал, чтобы пользоваться ботом!", reply_markup=markup)
 
-@bot.message_handler(commands=['help'])
-def cmd_help(message):
-    bot.reply_to(message,
-        "Доступные команды:\n"
-        "/usd, /eur, /cny, /btc, /eth\n"
-        "/moex, /sp500, /gold, /oil, /keyrate, /news\n"
-        "/stock [тикер], /help\n\n"
-        "Используйте кнопки в меню для быстрого доступа.",
-        reply_markup=main_menu_button()
-    )
-
-@bot.message_handler(commands=['usd'])
-def cmd_usd(message):
-    rates = get_currency_rates()
-    if rates and 'USD' in rates and rates['USD']:
-        bot.reply_to(message, f"💵 Доллар: {rates['USD']:.2f} ₽", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['eur'])
-def cmd_eur(message):
-    rates = get_currency_rates()
-    if rates and 'EUR' in rates and rates['EUR']:
-        bot.reply_to(message, f"💶 Евро: {rates['EUR']:.2f} ₽", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['cny'])
-def cmd_cny(message):
-    data = get_cny_rate()
-    if data and data['value']:
-        bot.reply_to(message, f"🇨🇳 Юань: {data['value']:.2f} ₽", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['btc'])
-def cmd_btc(message):
-    data = get_crypto('bitcoin')
-    if data:
-        bot.reply_to(message, f"₿ BTC: ${data['usd']:.0f} / €{data['eur']:.0f}", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['eth'])
-def cmd_eth(message):
-    data = get_crypto('ethereum')
-    if data:
-        bot.reply_to(message, f"⟠ ETH: ${data['usd']:.0f} / €{data['eur']:.0f}", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['moex'])
-def cmd_moex(message):
-    data = get_moex_index()
-    if data:
-        sign = "+" if data['change'] >= 0 else ""
-        bot.reply_to(message, f"📈 MOEX: {data['value']:.2f} ({sign}{data['change']:.2f}%)", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка индекса.", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['sp500'])
-def cmd_sp500(message):
-    data = get_sp500()
-    if data:
-        sign = "+" if data['change'] >= 0 else ""
-        bot.reply_to(message, f"🇺🇸 S&P 500: {data['value']} ({sign}{data['change']}%)", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка S&P 500.", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['gold'])
-def cmd_gold(message):
-    data = get_gold_price()
-    if data:
-        bot.reply_to(message, f"🏆 Золото: ${data['usd']} / {data['rub']} ₽ за тройскую унцию", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['oil'])
-def cmd_oil(message):
-    data = get_oil_price()
-    if data:
-        bot.reply_to(message, f"🛢 Нефть Brent: ${data['price']} за баррель", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['keyrate'])
-def cmd_keyrate(message):
-    data = get_key_rate()
-    if data:
-        bot.reply_to(message, f"🔑 Ставка: {data['rate']}% ({data['date']})", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['news'])
-def cmd_news(message):
-    news = get_news()
-    if news:
-        text = "📰 Новости:\n"
-        for item in news:
-            text += f"• {item['title']} ({item['pub_date']})\n🔗 {item['link']}\n\n"
-        bot.reply_to(message, text, reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
-
-@bot.message_handler(commands=['stock'])
-def cmd_stock(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "Укажи тикер: /stock AAPL", reply_markup=main_menu_button())
-        return
-    ticker = args[1].upper()
-    data = get_stock_quote(ticker)
-    if data:
-        sign = "+" if data['change'] >= 0 else ""
-        bot.reply_to(message, f"📊 {ticker}: {data['price']} {data['currency']} ({sign}{data['change']}%)", reply_markup=main_menu_button())
-    else:
-        bot.reply_to(message, "❌ Не найден тикер или ошибка API.", reply_markup=main_menu_button())
-
-# ---------- FALLBACK ДЛЯ ТЕКСТОВЫХ СООБЩЕНИЙ ----------
-@bot.message_handler(func=lambda message: True)
-def handle_text(message):
-    bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
-
-# ---------- ЕДИНЫЙ ОБРАБОТЧИК CALLBACK ----------
+# ---------- ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (без изменений) ----------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    # Проверка подписки
     if call.data == 'check_sub':
         if is_subscribed(call.from_user.id):
             bot.edit_message_text("✅ Подписка подтверждена! Нажми /start.", call.message.chat.id, call.message.message_id)
@@ -681,7 +468,6 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "❌ Ты ещё не подписан!", show_alert=True)
         return
 
-    # ---------- ОСНОВНЫЕ РАЗДЕЛЫ ----------
     if call.data == 'currencies':
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
@@ -736,10 +522,9 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
         return
 
-    # ---------- ОТДЕЛЬНЫЕ КОМАНДЫ ----------
     if call.data == 'currency_usd':
-        rates = get_currency_rates()
-        if rates and 'USD' in rates and rates['USD']:
+        rates = get_cbr_rates()
+        if rates and 'USD' in rates:
             bot.send_message(call.message.chat.id, f"💵 Доллар: {rates['USD']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -747,8 +532,8 @@ def callback_query(call):
         return
 
     if call.data == 'currency_eur':
-        rates = get_currency_rates()
-        if rates and 'EUR' in rates and rates['EUR']:
+        rates = get_cbr_rates()
+        if rates and 'EUR' in rates:
             bot.send_message(call.message.chat.id, f"💶 Евро: {rates['EUR']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -757,7 +542,7 @@ def callback_query(call):
 
     if call.data == 'currency_cny':
         data = get_cny_rate()
-        if data and data['value']:
+        if data:
             bot.send_message(call.message.chat.id, f"🇨🇳 Юань: {data['value']:.2f} ₽", reply_markup=main_menu_button())
         else:
             bot.send_message(call.message.chat.id, "❌ Ошибка курса.", reply_markup=main_menu_button())
@@ -782,7 +567,6 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
         return
 
-    # ---------- ГРАФИКИ ----------
     if call.data.startswith('chart_'):
         parts = call.data.split('_')
         if len(parts) < 3:
@@ -916,8 +700,131 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
         return
 
-    # Если ничего не подошло
     bot.answer_callback_query(call.id, "Неизвестная команда.")
+
+# ---------- ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ----------
+@bot.message_handler(func=lambda message: True)
+def handle_text(message):
+    bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
+
+# ---------- ОСТАЛЬНЫЕ ТЕКСТОВЫЕ КОМАНДЫ ----------
+@bot.message_handler(commands=['usd'])
+def cmd_usd(message):
+    rates = get_cbr_rates()
+    if rates and 'USD' in rates:
+        bot.reply_to(message, f"💵 Доллар: {rates['USD']:.2f} ₽", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['eur'])
+def cmd_eur(message):
+    rates = get_cbr_rates()
+    if rates and 'EUR' in rates:
+        bot.reply_to(message, f"💶 Евро: {rates['EUR']:.2f} ₽", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['cny'])
+def cmd_cny(message):
+    data = get_cny_rate()
+    if data:
+        bot.reply_to(message, f"🇨🇳 Юань: {data['value']:.2f} ₽", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['btc'])
+def cmd_btc(message):
+    data = get_crypto('bitcoin')
+    if data:
+        bot.reply_to(message, f"₿ BTC: ${data['usd']:.0f} / €{data['eur']:.0f}", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['eth'])
+def cmd_eth(message):
+    data = get_crypto('ethereum')
+    if data:
+        bot.reply_to(message, f"⟠ ETH: ${data['usd']:.0f} / €{data['eur']:.0f}", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['moex'])
+def cmd_moex(message):
+    data = get_moex_index()
+    if data:
+        sign = "+" if data['change'] >= 0 else ""
+        bot.reply_to(message, f"📈 MOEX: {data['value']:.2f} ({sign}{data['change']:.2f}%)", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['sp500'])
+def cmd_sp500(message):
+    data = get_sp500()
+    if data:
+        sign = "+" if data['change'] >= 0 else ""
+        bot.reply_to(message, f"🇺🇸 S&P 500: {data['value']} ({sign}{data['change']}%)", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['gold'])
+def cmd_gold(message):
+    data = get_gold_price()
+    if data:
+        bot.reply_to(message, f"🏆 Золото: ${data['usd']} / {data['rub']} ₽ за тройскую унцию", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['oil'])
+def cmd_oil(message):
+    data = get_oil_price()
+    if data:
+        bot.reply_to(message, f"🛢 Нефть Brent: ${data['price']} за баррель", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['keyrate'])
+def cmd_keyrate(message):
+    data = get_key_rate()
+    if data:
+        bot.reply_to(message, f"🔑 Ставка: {data['rate']}% ({data['date']})", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['news'])
+def cmd_news(message):
+    news = get_news()
+    if news:
+        text = "📰 Новости:\n"
+        for item in news:
+            text += f"• {item['title']} ({item['pub_date']})\n🔗 {item['link']}\n\n"
+        bot.reply_to(message, text, reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Ошибка", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['stock'])
+def cmd_stock(message):
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "Укажи тикер: /stock AAPL", reply_markup=main_menu_button())
+        return
+    ticker = args[1].upper()
+    data = get_stock_quote(ticker)
+    if data:
+        sign = "+" if data['change'] >= 0 else ""
+        bot.reply_to(message, f"📊 {ticker}: {data['price']} {data['currency']} ({sign}{data['change']}%)", reply_markup=main_menu_button())
+    else:
+        bot.reply_to(message, "❌ Не найден тикер или ошибка API.", reply_markup=main_menu_button())
+
+@bot.message_handler(commands=['help'])
+def cmd_help(message):
+    bot.reply_to(message,
+        "Доступные команды:\n"
+        "/usd, /eur, /cny, /btc, /eth\n"
+        "/moex, /sp500, /gold, /oil, /keyrate, /news\n"
+        "/stock [тикер], /help\n\n"
+        "Используйте кнопки в меню для быстрого доступа.",
+        reply_markup=main_menu_button()
+    )
 
 # ---------- ЗАПУСК ----------
 if __name__ == "__main__":
