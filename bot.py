@@ -9,8 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from telebot import types
 
-BOT_TOKEN = "8803016019:AAGZPApeEG0jqEwua8nK49tL582f3Rftvy8"
-CHANNEL_ID = -1001657916970   # ваш числовой ID канала
+BOT_TOKEN = "8785574075:AAHSLtGw0LlNEd8wrTljof2kwLX1JAnALzM"   # НОВЫЙ ТОКЕН
+CHANNEL_ID = -1001657916970   # Ваш канал (числовой ID)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -21,7 +21,7 @@ def main_menu_button():
     markup.add(btn)
     return markup
 
-# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений) ----------
+# ---------- ФУНКЦИИ ДЛЯ API ----------
 def get_cbr_rates():
     url = "https://api.exchangerate.host/latest?base=USD&symbols=RUB,EUR,CNY"
     try:
@@ -36,10 +36,7 @@ def get_cbr_rates():
             cny_usd = data['rates']['CNY']
             rates['CNY'] = cny_usd * usd_rub
             return rates
-        else:
-            return None
-    except Exception as e:
-        logging.error(f"Ошибка получения курсов: {e}")
+    except:
         return None
 
 def get_moex_index():
@@ -79,7 +76,6 @@ def get_key_rate():
             date = record.get('Date')
             rate = record.text
             return {'date': date, 'rate': rate}
-        return None
     except:
         try:
             url2 = "https://www.cbr.ru/hd_base/KeyRate/"
@@ -89,7 +85,6 @@ def get_key_rate():
                 date = match.group(1)
                 rate = match.group(2).replace(',', '.')
                 return {'date': date, 'rate': rate}
-            return None
         except:
             return None
 
@@ -107,21 +102,19 @@ def get_gold_price():
                 rub_rate = rates['USD']
                 price_rub = price_usd * rub_rate
                 return {'usd': round(price_usd, 2), 'rub': round(price_rub, 2)}
-        return None
     except:
         return None
 
 def get_oil_price():
     ticker = "CL=F"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
         resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
         meta = data['chart']['result'][0]['meta']
         price = meta.get('regularMarketPrice')
         if price:
             return {'price': round(price, 2)}
-        return None
     except:
         return None
 
@@ -133,8 +126,8 @@ def get_cny_rate():
 
 def get_sp500():
     ticker = "^GSPC"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
         resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         data = resp.json()
         meta = data['chart']['result'][0]['meta']
@@ -143,7 +136,6 @@ def get_sp500():
         if price and previous_close:
             change = ((price - previous_close) / previous_close) * 100
             return {'value': round(price, 2), 'change': round(change, 2)}
-        return None
     except:
         return None
 
@@ -181,7 +173,6 @@ def get_stock_quote(ticker):
                 'change': round(change, 2),
                 'currency': currency
             }
-        return None
     except:
         return None
 
@@ -200,7 +191,6 @@ def get_historical_data(asset_type, symbol, days=7):
                     values = [data['rates'][d]['RUB'] for d in dates]
                     if dates and values:
                         return {'dates': dates, 'values': values}
-                return None
             except:
                 return None
         else:
@@ -220,7 +210,6 @@ def get_historical_data(asset_type, symbol, days=7):
                 valid = [(d, c) for d, c in zip(dates, close) if c is not None]
                 if valid:
                     return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
             except:
                 return None
     elif asset_type == 'crypto':
@@ -235,7 +224,6 @@ def get_historical_data(asset_type, symbol, days=7):
                 values = [float(c[4]) for c in data]
                 if dates and values:
                     return {'dates': dates, 'values': values}
-                return None
             except:
                 return None
     elif asset_type == 'index':
@@ -254,7 +242,6 @@ def get_historical_data(asset_type, symbol, days=7):
                     values = [row[1] for row in history]
                     if dates and values:
                         return {'dates': dates, 'values': values}
-                return None
             except:
                 return None
         elif symbol == 'SP500':
@@ -271,7 +258,6 @@ def get_historical_data(asset_type, symbol, days=7):
                 valid = [(d, c) for d, c in zip(dates, close) if c is not None]
                 if valid:
                     return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
             except:
                 return None
         return None
@@ -291,7 +277,6 @@ def get_historical_data(asset_type, symbol, days=7):
                 valid = [(d, c) for d, c in zip(dates, close) if c is not None]
                 if valid:
                     return {'dates': [v[0] for v in valid], 'values': [v[1] for v in valid]}
-                return None
             except:
                 return None
     return None
@@ -458,7 +443,7 @@ def start(message):
         markup.add(types.InlineKeyboardButton("🔄 Проверить", callback_data='check_sub'))
         bot.send_message(message.chat.id, "❌ Подпишись на канал, чтобы пользоваться ботом!", reply_markup=markup)
 
-# ---------- ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (без изменений) ----------
+# ---------- ЕДИНЫЙ ОБРАБОТЧИК CALLBACK ----------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     if call.data == 'check_sub':
@@ -691,12 +676,7 @@ def callback_query(call):
             types.InlineKeyboardButton("🔑 Ключевая ставка", callback_data='keyrate'),
             types.InlineKeyboardButton("📰 Новости", callback_data='news')
         )
-        bot.edit_message_text(
-            "✅ Главное меню:\nВыберите нужный раздел.",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
+        bot.edit_message_text("✅ Главное меню:\nВыберите нужный раздел.", call.message.chat.id, call.message.message_id, reply_markup=markup)
         bot.answer_callback_query(call.id)
         return
 
@@ -707,7 +687,7 @@ def callback_query(call):
 def handle_text(message):
     bot.reply_to(message, "Используйте кнопки в меню или команды из /help. Для начала нажмите /start.")
 
-# ---------- ОСТАЛЬНЫЕ ТЕКСТОВЫЕ КОМАНДЫ ----------
+# ---------- ТЕКСТОВЫЕ КОМАНДЫ ----------
 @bot.message_handler(commands=['usd'])
 def cmd_usd(message):
     rates = get_cbr_rates()
